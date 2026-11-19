@@ -1,0 +1,5 @@
+Experiment,Model,Feature_Count,MAE,RMSE,R2 Score,Model_Path,MAE_Change_vs_Baseline,RMSE_Change_vs_Baseline,MAE_Improvement_Percent,RMSE_Improvement_Percent
+E1_Temporal_Only,Random_Forest,15,23.701170893410666,55.682604694740036,0.994064433716357,models/experiments\E1_Temporal_Only_Random_Forest.pkl,0.0,0.0,0.0,0.0
+E2_Temporal_Weather,Random_Forest,20,24.36700095695305,56.43909828884166,0.9939020591460039,models/experiments\E2_Temporal_Weather_Random_Forest.pkl,0.6658300635423835,0.7564935941016273,-2.809270759393139,-1.3585815502863647
+E3_Temporal_Calendar,Random_Forest,18,23.24872965134901,54.7094119549356,0.9942700983432852,models/experiments\E3_Temporal_Calendar_Random_Forest.pkl,-0.45244124206165637,-0.9731927398044391,1.9089404658376723,1.7477500291870687
+E4_Temporal_Weather_Calendar,Random_Forest,23,24.001353934035,55.70907506707693,0.9940587890811808,models/experiments\E4_Temporal_Weather_Calendar_Random_Forest.pkl,0.3001830406243329,0.02647037233689531,-1.266532535351614,-0.04753795639052745
