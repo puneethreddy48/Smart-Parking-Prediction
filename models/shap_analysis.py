@@ -6,35 +6,47 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
+from pathlib import Path
 from sklearn.pipeline import Pipeline
 
-# ==========================================
+# =====================================================
 # 1. PROJECT PATHS
-# ==========================================
+# =====================================================
 
-DATA_PATH = "dataset/holiday_enhanced_parking.csv"
-MODEL_PATH = "models/enhanced_best_model.pkl"
-OUTPUT_DIR = "outputs"
+BASE_DIR = Path(__file__).resolve().parent.parent
 
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+DATA_PATH = BASE_DIR / "dataset" / "holiday_enhanced_parking.csv"
 
-# ==========================================
+# IMPORTANT: Use the exact E4 model loaded by app.py
+MODEL_PATH = (
+    BASE_DIR / "models" / "experiments" /
+    "E4_Temporal_Weather_Calendar_Random_Forest.pkl"
+)
+
+OUTPUT_DIR = BASE_DIR / "outputs"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+# =====================================================
 # 2. LOAD DATASET
-# ==========================================
+# =====================================================
 
-print("Loading dataset...")
+print("Loading E4 contextual parking dataset...")
 
 df = pd.read_csv(DATA_PATH)
 
-df["LastUpdated"] = pd.to_datetime(df["LastUpdated"])
+df["LastUpdated"] = pd.to_datetime(
+    df["LastUpdated"], errors="coerce"
+)
+
+df = df.dropna(subset=["LastUpdated"])
 
 df = df.sort_values(
     ["LastUpdated", "SystemCodeNumber"]
 ).reset_index(drop=True)
 
-# ==========================================
-# 3. CREATE TEMPORAL FEATURES
-# ==========================================
+# =====================================================
+# 3. CREATE CYCLICAL TEMPORAL FEATURES
+# =====================================================
 
 df["Time_sin"] = np.sin(
     2 * np.pi * (df["Hour"] * 60 + df["Minute"]) / 1440
@@ -60,11 +72,12 @@ df["Month_cos"] = np.cos(
     2 * np.pi * (df["Month"] - 1) / 12
 )
 
-# ==========================================
-# 4. SELECT MODEL FEATURES
-# ==========================================
+# =====================================================
+# 4. E4 FEATURES - ALL 23 FEATURES
+# =====================================================
 
 features = [
+    # Temporal features (15)
     "SystemCodeNumber",
     "Capacity",
     "Hour",
@@ -79,81 +92,106 @@ features = [
     "Weekday_sin",
     "Weekday_cos",
     "Month_sin",
-    "Month_cos"
+    "Month_cos",
+
+    # Weather features (5)
+    "temperature_2m",
+    "relative_humidity_2m",
+    "precipitation",
+    "weather_code",
+    "wind_speed_10m",
+
+    # Calendar features (3)
+    "IsSchoolHoliday",
+    "IsHalfTerm",
+    "IsChristmasPeriod"
 ]
 
-# ==========================================
-# 5. CHRONOLOGICAL TRAINING DATA ONLY
-# ==========================================
+missing = [col for col in features if col not in df.columns]
+
+if missing:
+    raise ValueError(
+        f"Missing E4 features in dataset: {missing}"
+    )
+
+print("Total E4 input features:", len(features))
+
+# =====================================================
+# 5. CHRONOLOGICAL TRAINING SAMPLE
+# =====================================================
 
 timestamps = np.sort(df["LastUpdated"].unique())
 
 split_index = int(len(timestamps) * 0.8)
 
+if split_index >= len(timestamps):
+    raise ValueError("Insufficient timestamps for chronological split.")
+
 split_time = timestamps[split_index]
 
-train_df = df[df["LastUpdated"] < split_time].copy()
+train_df = df[
+    df["LastUpdated"] < split_time
+].copy()
 
-# Sample training records for SHAP
 sample_size = min(300, len(train_df))
+
+if sample_size == 0:
+    raise ValueError("No training records available for SHAP.")
 
 X_sample = train_df[features].sample(
     n=sample_size,
     random_state=42
 )
 
-print("Training sample size:", len(X_sample))
+print("SHAP training sample:", len(X_sample))
 
-# ==========================================
-# 6. LOAD TRAINED PIPELINE
-# ==========================================
+# =====================================================
+# 6. LOAD THE EXACT E4 MODEL
+# =====================================================
 
-print("\nLoading trained model...")
+print("\nLoading E4 Random Forest model...")
+
+if not MODEL_PATH.exists():
+    raise FileNotFoundError(
+        f"E4 model not found: {MODEL_PATH}"
+    )
 
 pipeline = joblib.load(MODEL_PATH)
 
 if not isinstance(pipeline, Pipeline):
     raise TypeError(
-        "Expected a Scikit-learn Pipeline. "
-        "Check the saved model."
+        "The E4 model is not a Scikit-learn Pipeline."
     )
 
-print("\nPipeline structure:")
+print("Pipeline structure:")
 
 for name, step in pipeline.steps:
     print(name, ":", type(step).__name__)
-
-# ==========================================
-# 7. SEPARATE PREPROCESSOR AND RANDOM FOREST
-# ==========================================
 
 preprocessor = Pipeline(pipeline.steps[:-1])
 
 random_forest = pipeline.steps[-1][1]
 
-print("\nFinal estimator:", type(random_forest).__name__)
-
 if not hasattr(random_forest, "estimators_"):
     raise TypeError(
-        "The final pipeline step does not appear "
-        "to be a fitted Random Forest."
+        "The final estimator is not a fitted Random Forest."
     )
 
-# ==========================================
-# 8. TRANSFORM DATA
-# ==========================================
+print("\nE4 Random Forest loaded successfully.")
 
-print("\nApplying preprocessing...")
+# =====================================================
+# 7. APPLY PREPROCESSING
+# =====================================================
+
+print("\nApplying E4 preprocessing...")
 
 X_transformed = preprocessor.transform(X_sample)
 
-# Convert sparse matrix into dense array
 if hasattr(X_transformed, "toarray"):
     X_transformed = X_transformed.toarray()
 
 X_transformed = np.asarray(X_transformed)
 
-# Get transformed feature names
 try:
     feature_names = preprocessor.get_feature_names_out()
 except Exception:
@@ -167,35 +205,40 @@ X_transformed = pd.DataFrame(
     columns=feature_names
 )
 
-print("Transformed features:", X_transformed.shape[1])
+print("Transformed feature count:", X_transformed.shape[1])
 
-# ==========================================
-# 9. SHAP TREE EXPLAINER
-# ==========================================
+# =====================================================
+# 8. SHAP EXPLAINER
+# =====================================================
 
-print("\nCreating SHAP explainer...")
+print("\nCreating E4 SHAP explainer...")
 
 explainer = shap.TreeExplainer(random_forest)
 
 shap_values = explainer.shap_values(X_transformed)
 
-# Handle different SHAP output formats
-if isinstance(shap_values, list):
-    shap_values = shap_values[0]
-
 if hasattr(shap_values, "values"):
     shap_values = shap_values.values
+
+if isinstance(shap_values, list):
+    shap_values = shap_values[0]
 
 shap_values = np.asarray(shap_values)
 
 if shap_values.ndim == 3:
     shap_values = shap_values[:, :, 0]
 
-print("SHAP analysis generated successfully.")
+if shap_values.shape != X_transformed.shape:
+    raise ValueError(
+        f"SHAP shape {shap_values.shape} does not match "
+        f"input shape {X_transformed.shape}."
+    )
 
-# ==========================================
-# 10. SHAP SUMMARY PLOT
-# ==========================================
+print("E4 SHAP analysis completed.")
+
+# =====================================================
+# 9. GENERATE SHAP SUMMARY PLOT
+# =====================================================
 
 print("\nGenerating SHAP summary plot...")
 
@@ -209,25 +252,24 @@ shap.summary_plot(
 )
 
 plt.title(
-    "SHAP Summary - Smart Parking Prediction",
-    fontsize=14
+    "SHAP Summary - E4 Smart Parking Model"
 )
 
 plt.tight_layout()
 
 plt.savefig(
-    os.path.join(OUTPUT_DIR, "shap_summary.png"),
+    OUTPUT_DIR / "shap_summary.png",
     dpi=300,
     bbox_inches="tight"
 )
 
 plt.close()
 
-# ==========================================
-# 11. SHAP FEATURE IMPORTANCE
-# ==========================================
+# =====================================================
+# 10. GENERATE SHAP FEATURE IMPORTANCE
+# =====================================================
 
-print("Generating feature importance plot...")
+print("Generating SHAP feature importance...")
 
 plt.figure(figsize=(12, 8))
 
@@ -240,23 +282,22 @@ shap.summary_plot(
 )
 
 plt.title(
-    "SHAP Feature Importance - Smart Parking",
-    fontsize=14
+    "SHAP Feature Importance - E4 Smart Parking Model"
 )
 
 plt.tight_layout()
 
 plt.savefig(
-    os.path.join(OUTPUT_DIR, "shap_feature_importance.png"),
+    OUTPUT_DIR / "shap_feature_importance.png",
     dpi=300,
     bbox_inches="tight"
 )
 
 plt.close()
 
-# ==========================================
-# 12. SAVE FEATURE IMPORTANCE DATA
-# ==========================================
+# =====================================================
+# 11. SAVE SHAP IMPORTANCE CSV
+# =====================================================
 
 importance = np.abs(shap_values).mean(axis=0)
 
@@ -266,31 +307,33 @@ importance_df = pd.DataFrame({
 })
 
 importance_df = importance_df.sort_values(
-    by="Mean_SHAP_Importance",
+    "Mean_SHAP_Importance",
     ascending=False
 )
 
 importance_df.to_csv(
-    os.path.join(OUTPUT_DIR, "shap_importance.csv"),
+    OUTPUT_DIR / "shap_importance.csv",
     index=False
 )
 
-# ==========================================
-# 13. FINAL OUTPUT
-# ==========================================
+# =====================================================
+# 12. FINAL OUTPUT
+# =====================================================
 
-print("\n" + "=" * 50)
-print("SHAP ANALYSIS COMPLETED!")
-print("=" * 50)
+print("\n" + "=" * 55)
+print("E4 SHAP ANALYSIS COMPLETED SUCCESSFULLY!")
+print("=" * 55)
 
-print("\nTop 10 Important Features:")
+print("\nTop 10 E4 Important Features:")
 
-print(importance_df.head(10).to_string(index=False))
+print(
+    importance_df.head(10).to_string(index=False)
+)
 
-print("\nGenerated Files:")
+print("\nGenerated files:")
 
-print("1. outputs/shap_summary.png")
-print("2. outputs/shap_feature_importance.png")
-print("3. outputs/shap_importance.csv")
+print(OUTPUT_DIR / "shap_summary.png")
+print(OUTPUT_DIR / "shap_feature_importance.png")
+print(OUTPUT_DIR / "shap_importance.csv")
 
-print("\nAll operations completed successfully!")
+print("\nYou can now run your Streamlit application.")
